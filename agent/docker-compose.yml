@@ -1,0 +1,14 @@
+# Instalação no local das câmeras. Crie um arquivo .env ao lado deste com:
+#   VIGIA_SERVER=https://seu-servico.up.railway.app
+#   AGENT_TOKEN=o-mesmo-token-do-servidor
+services:
+  agente:
+    build: .
+    restart: always
+    network_mode: host
+    environment:
+      - VIGIA_SERVER=${VIGIA_SERVER}
+      - AGENT_TOKEN=${AGENT_TOKEN}
+    logging:
+      driver: json-file
+      options: { max-size: "10m", max-file: "3" }

@@ -1,0 +1,19 @@
+# Sobe banco e servidor em um computador só, para testar. Em produção use a Railway.
+services:
+  db:
+    image: postgres:17-alpine
+    restart: always
+    environment:
+      POSTGRES_PASSWORD: vigia
+      POSTGRES_DB: vigia
+    volumes: [dbdata:/var/lib/postgresql/data]
+  servidor:
+    build: .
+    restart: always
+    depends_on: [db]
+    env_file: .env
+    environment:
+      DATABASE_URL: postgresql://postgres:vigia@db:5432/vigia
+    ports: ["8000:8000"]
+volumes:
+  dbdata:
