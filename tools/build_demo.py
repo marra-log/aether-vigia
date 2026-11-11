@@ -122,14 +122,16 @@ function build(c,step,count){
 }
 let events=[
  {id:107,camera_id:2,camera:"Estacionamento",type:"BEHAVIOR_SPIKE",kind:"comportamento",severity:"warning",status:"open",started_at:NOW-420,ended_at:null,title:"Movimento fora do normal",detail:"Há muito mais movimento do que esta câmera costuma ter neste horário.",advice:"Olhe a imagem para ver o que está acontecendo.",has_snapshot:true,acked:false,feedback:null,awaiting_review:true,reviewed_by:null},
- {id:108,camera_id:1,camera:"Portão da frente",type:"MANUAL",kind:"operador",severity:"critical",status:"closed",started_at:NOW-9400,ended_at:NOW-9400,title:"Anomalia apontada pelo operador",detail:"Portão aberto fora do horário de entrega.",advice:"Veja a observação e a imagem.",has_snapshot:true,acked:true,feedback:"real",awaiting_review:false,reviewed_by:"operator"},
+ {id:108,camera_id:1,camera:"Portão da frente",type:"MANUAL",kind:"operador",severity:"critical",status:"closed",started_at:NOW-9400,ended_at:NOW-9400,title:"Anomalia apontada pelo operador",detail:"Portão aberto fora do horário de entrega.",advice:"Veja a observação e a imagem.",has_snapshot:true,acked:true,feedback:"real",awaiting_review:false,reviewed_by:"operator",reviewed_name:"Ana Souza"},
  {id:101,camera_id:4,camera:"Estoque",type:"OBSTRUCTED",kind:"seguranca",severity:"critical",status:"open",started_at:NOW-1560,ended_at:null,title:"Câmera tampada ou bloqueada",detail:"A imagem perdeu quase todo o detalhe de repente.",advice:"Veja se algo cobriu a lente ou se houve sabotagem.",has_snapshot:true,acked:false,feedback:null},
  {id:102,camera_id:5,camera:"Fundos",type:"UNSTABLE",kind:"sinal",severity:"warning",status:"open",started_at:NOW-11200,ended_at:null,title:"Sinal oscilando",detail:"A câmera caiu 5 vezes na última hora.",advice:"Costuma ser cabo, fonte ou Wi-Fi fraco.",has_snapshot:false,acked:false,feedback:null},
  {id:103,camera_id:5,camera:"Fundos",type:"INTRUSION",kind:"seguranca",severity:"critical",status:"closed",started_at:NOW-27000,ended_at:NOW-26300,title:"Pessoa em área protegida",detail:"Uma pessoa foi detectada na área e no horário que você protegeu.",advice:"Olhe a imagem e acione quem for preciso.",has_snapshot:true,acked:false,feedback:null},
- {id:104,camera_id:2,camera:"Estacionamento",type:"BEHAVIOR_SPIKE",kind:"comportamento",severity:"warning",status:"closed",started_at:NOW-18300,ended_at:NOW-16900,title:"Movimento fora do normal",detail:"Há muito mais movimento do que esta câmera costuma ter neste horário.",advice:"Olhe a imagem para ver o que está acontecendo.",has_snapshot:true,acked:true,feedback:"real",reviewed_by:"operator"},
+ {id:104,camera_id:2,camera:"Estacionamento",type:"BEHAVIOR_SPIKE",kind:"comportamento",severity:"warning",status:"closed",started_at:NOW-18300,ended_at:NOW-16900,title:"Movimento fora do normal",detail:"Há muito mais movimento do que esta câmera costuma ter neste horário.",advice:"Olhe a imagem para ver o que está acontecendo.",has_snapshot:true,acked:true,feedback:"real",reviewed_by:"operator",reviewed_name:"Ana Souza"},
  {id:105,camera_id:3,camera:"Recepção",type:"BLUR",kind:"sinal",severity:"warning",status:"closed",started_at:NOW-60000,ended_at:NOW-47000,title:"Imagem desfocada",detail:"A nitidez caiu bem abaixo do normal desta câmera.",advice:"Limpe a lente e confira o foco.",has_snapshot:true,acked:true,feedback:"real"},
  {id:106,camera_id:5,camera:"Fundos",type:"OFFLINE",kind:"sinal",severity:"critical",status:"closed",started_at:NOW-5300,ended_at:NOW-3900,title:"Câmera fora do ar",detail:"Parei de receber imagem desta câmera.",advice:"Confira energia e cabo de rede da câmera.",has_snapshot:false,acked:true,feedback:"real"}
 ];
+const zones={1:[[[0.3,0.2],[0.7,0.2],[0.72,0.82],[0.28,0.82]]]};
+let operators=[{id:1,name:"Ana Souza",username:"ana.souza",active:true,last_login:NOW-1800}];
 const armed={1:["22:00","06:00"],5:["22:00","06:00"]};
 let recipients=[{id:1,name:"Dono",phone:"5531900000000",min_severity:"warning",quiet_start:"23:00",quiet_end:"06:00",active:true,can_command:true}];
 let recent=[{id:10,kind:"alert",status:"review",created_at:NOW-420,sent_at:null,error:null,event_id:107},{id:9,kind:"alert",status:"sent",created_at:NOW-1500,sent_at:NOW-1500,error:null,event_id:101},{id:8,kind:"resolved",status:"sent",created_at:NOW-3900,sent_at:NOW-3900,error:null,event_id:106},{id:7,kind:"alert",status:"merged",created_at:NOW-5300,sent_at:null,error:null,event_id:106},{id:6,kind:"alert",status:"sent",created_at:NOW-11200,sent_at:NOW-11200,error:null,event_id:102},{id:5,kind:"digest",status:"sent",created_at:NOW-36000,sent_at:NOW-36000,error:null,event_id:null}];
@@ -141,7 +143,7 @@ window.demoImage=p=>IMAGES[p]||"";
 window.demoApi=async function(path,opts){
  opts=opts||{};const m=opts.method||"GET",body=opts.body;
  const [p,q]=path.split("?");const params=new URLSearchParams(q||"");
- if(p==="/api/me")return {role:window.VIGIA_DEMO_ROLE||"owner",review:true,review_minutes:10};
+ if(p==="/api/me")return {role:window.VIGIA_DEMO_ROLE||"owner",name:window.VIGIA_DEMO_ROLE==="operator"?"Ana Souza":null,review:true,review_minutes:10};
  if(p==="/api/overview"){
   const open=events.filter(e=>e.status==="open"||e.awaiting_review);
   return {site:"Comercial Exemplo",review_count:events.filter(e=>e.awaiting_review).length,now:Date.now()/1000,step:STEP,agent:{online:true,last_seen:NOW},events_24h:6,alerts_24h:5,mute_until:mute,open_events:open.map(pub),
@@ -156,12 +158,12 @@ window.demoApi=async function(path,opts){
   const s=params.get("status"),k=params.get("kind");
   return {events:events.filter(e=>(!s||(s==="review"?e.awaiting_review:e.status===s))&&(!k||e.kind===k)).sort((a,b)=>b.started_at-a.started_at).map(pub)};
  }
- if((x=p.match(/^\/api\/events\/(\d+)\/feedback$/))){const e=events.find(k=>k.id==x[1]);e.feedback=body.feedback;e.acked=true;e.reviewed_by=window.VIGIA_DEMO_ROLE||"owner";if(e.awaiting_review){e.awaiting_review=false;if(body.feedback==="false"){e.status="closed";e.ended_at=Date.now()/1000}}return {ok:true}}
- if((x=p.match(/^\/api\/cameras\/(\d+)\/flag$/))){const c=cams.find(k=>k.id==x[1]),t=Date.now()/1000,id=Date.now();IMAGES["/api/events/"+id+"/snapshot"]=IMAGES["/api/cameras/"+c.id+"/thumb"];events.unshift({id,camera_id:c.id,camera:c.name,type:"MANUAL",kind:"operador",severity:body.severity,status:"closed",started_at:t,ended_at:t,title:"Anomalia apontada pelo operador",detail:body.note,advice:"Veja a observação e a imagem.",has_snapshot:true,acked:true,feedback:"real",awaiting_review:false,reviewed_by:window.VIGIA_DEMO_ROLE||"owner"});recent.unshift({id,kind:"alert",status:"sent",created_at:t,sent_at:t,error:null,event_id:id});return {ok:true}}
- if(p==="/api/cameras"&&m==="GET"){return {cameras:cams.map(c=>({id:c.id,name:c.name,location:"",enabled:true,state:"online",url_masked:"rtsp://•••@192.168.0."+(20+c.id)+":554/cam/realmonitor?channel=1&subtype=1",armed_start:(armed[c.id]||[null])[0],armed_end:(armed[c.id]||[null,null])[1],armed_days:[0,1,2,3,4,5,6],zones:[],loiter_seconds:180}))}}
+ if((x=p.match(/^\/api\/events\/(\d+)\/feedback$/))){const e=events.find(k=>k.id==x[1]);e.feedback=body.feedback;e.acked=true;e.reviewed_by=window.VIGIA_DEMO_ROLE||"owner";e.reviewed_name=window.VIGIA_DEMO_ROLE==="operator"?"Ana Souza":null;if(e.awaiting_review){e.awaiting_review=false;if(body.feedback==="false"){e.status="closed";e.ended_at=Date.now()/1000}}return {ok:true}}
+ if((x=p.match(/^\/api\/cameras\/(\d+)\/flag$/))){const c=cams.find(k=>k.id==x[1]),t=Date.now()/1000,id=Date.now();IMAGES["/api/events/"+id+"/snapshot"]=IMAGES["/api/cameras/"+c.id+"/thumb"];events.unshift({id,camera_id:c.id,camera:c.name,type:"MANUAL",kind:"operador",severity:body.severity,status:"closed",started_at:t,ended_at:t,title:"Anomalia apontada pelo operador",detail:body.note,advice:"Veja a observação e a imagem.",has_snapshot:true,acked:true,feedback:"real",awaiting_review:false,reviewed_by:window.VIGIA_DEMO_ROLE||"owner",reviewed_name:window.VIGIA_DEMO_ROLE==="operator"?"Ana Souza":null});recent.unshift({id,kind:"alert",status:"sent",created_at:t,sent_at:t,error:null,event_id:id});return {ok:true}}
+ if(p==="/api/cameras"&&m==="GET"){return {cameras:cams.map(c=>({id:c.id,name:c.name,location:"",enabled:true,state:"online",url_masked:"rtsp://•••@192.168.0."+(20+c.id)+":554/cam/realmonitor?channel=1&subtype=1",armed_start:(armed[c.id]||[null])[0],armed_end:(armed[c.id]||[null,null])[1],armed_days:[0,1,2,3,4,5,6],zones:zones[c.id]||[],loiter_seconds:180,has_thumb:true}))}}
  if(p.startsWith("/api/cameras")&&m!=="GET"){
   if(m==="POST"){const id=Math.max(...cams.map(c=>c.id))+1;cams.push({id,name:body.name,busy:2,seed:id*13});IMAGES["/api/cameras/"+id+"/thumb"]=IMAGES["/api/cameras/2/thumb"];if(body.armed_start)armed[id]=[body.armed_start,body.armed_end]}
-  if(m==="PUT"){const c=cams.find(k=>p.endsWith("/"+k.id));c.name=body.name;if(body.armed_start)armed[c.id]=[body.armed_start,body.armed_end];else delete armed[c.id]}
+  if(m==="PUT"){const c=cams.find(k=>p.endsWith("/"+k.id));c.name=body.name;zones[c.id]=body.zones;if(body.armed_start)armed[c.id]=[body.armed_start,body.armed_end];else delete armed[c.id]}
   if(m==="DELETE"){const i=cams.findIndex(k=>p.endsWith("/"+k.id));cams.splice(i,1)}
   return {ok:true};
  }
@@ -169,6 +171,9 @@ window.demoApi=async function(path,opts){
  if(p==="/api/recipients"&&m==="POST"){const d=body.phone.replace(/\D/g,"");if(d.length<12)throw new Error("Use o número com DDI e DDD. Exemplo: 5531999998888");recipients.push({...body,phone:d,id:Date.now()});return {ok:true}}
  if(p.endsWith("/test")){recent.unshift({id:Date.now(),kind:"test",status:"sent",created_at:Date.now()/1000,sent_at:Date.now()/1000,error:null,event_id:null});return {ok:true}}
  if(p.startsWith("/api/recipients/")&&m==="DELETE"){recipients=recipients.filter(r=>!p.endsWith("/"+r.id));return {ok:true}}
+ if(p==="/api/operators"&&m==="GET")return {operators:operators.map(pub),review:true,review_minutes:10};
+ if(p==="/api/operators"&&m==="POST"){operators.push({id:Date.now(),name:body.name,username:body.username.toLowerCase(),active:true,last_login:null});return {ok:true}}
+ if(p.startsWith("/api/operators/")){operators=operators.filter(o=>!p.endsWith("/"+o.id));return {ok:true}}
  if(p==="/api/whatsapp/connection")return {supported:false};
  if(p==="/api/mute"){mute=body.hours?Date.now()/1000+body.hours*3600:0;return {until:mute}}
  return {};

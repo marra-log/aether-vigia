@@ -5,6 +5,7 @@ import base64
 import hashlib
 import hmac
 import json
+import os
 import time
 from collections import defaultdict, deque
 from typing import Deque, Dict, Optional
@@ -53,16 +54,33 @@ def mask_url(url: str) -> str:
     return urlunsplit((parts.scheme, host, parts.path, parts.query, ""))
 
 
-def create_session(role: str = "owner") -> str:
-    body = base64.urlsafe_b64encode(
-        json.dumps({"exp": int(time.time()) + SESSION_DAYS * 86400, "role": role}).encode()
-    ).decode()
+def hash_password(password: str) -> str:
+    salt = os.urandom(16)
+    digest = hashlib.scrypt(password.encode(), salt=salt, n=2 ** 14, r=8, p=1)
+    return f"scrypt${salt.hex()}${digest.hex()}"
+
+
+def verify_password(password: str, stored: str) -> bool:
+    try:
+        _, salt, digest = stored.split("$")
+        got = hashlib.scrypt(password.encode(), salt=bytes.fromhex(salt), n=2 ** 14, r=8, p=1)
+    except ValueError:
+        return False
+    return hmac.compare_digest(got.hex(), digest)
+
+
+def create_session(role: str = "owner", operator_id: Optional[int] = None,
+                   name: Optional[str] = None) -> str:
+    payload = {"exp": int(time.time()) + SESSION_DAYS * 86400, "role": role}
+    if operator_id is not None:
+        payload.update({"oid": operator_id, "name": name})
+    body = base64.urlsafe_b64encode(json.dumps(payload).encode()).decode()
     sig = hmac.new(_key("session"), body.encode(), hashlib.sha256).hexdigest()
     return f"{body}.{sig}"
 
 
-def session_role(token: Optional[str]) -> Optional[str]:
-    """Papel da sessão (owner ou operator), ou None se inválida ou vencida."""
+def session_data(token: Optional[str]) -> Optional[dict]:
+    """Conteúdo da sessão ({role, oid?, name?}), ou None se inválida ou vencida."""
     if not token or "." not in token:
         return None
     body, sig = token.rsplit(".", 1)
@@ -75,19 +93,38 @@ def session_role(token: Optional[str]) -> Optional[str]:
         return None
     if data.get("exp", 0) <= time.time():
         return None
-    role = data.get("role", "owner")
-    return role if role in {"owner", "operator"} else None
+    data["role"] = data.get("role", "owner")
+    return data if data["role"] in {"owner", "operator"} else None
+
+
+def session_role(token: Optional[str]) -> Optional[str]:
+    data = session_data(token)
+    return data["role"] if data else None
 
 
 def valid_session(token: Optional[str]) -> bool:
     return session_role(token) is not None
 
 
-def require_user(vigia_session: Optional[str] = Cookie(default=None)) -> str:
-    role = session_role(vigia_session)
-    if role is None:
+def current_user(vigia_session: Optional[str] = Cookie(default=None)) -> dict:
+    """Quem está usando o painel. Operador removido ou desativado perde o acesso na hora."""
+    data = session_data(vigia_session)
+    if data is None:
         raise HTTPException(status_code=401, detail="Entre com sua senha")
-    return role
+    user = {"role": data["role"], "name": data.get("name"), "oid": data.get("oid")}
+    if user["oid"] is not None:
+        from .db import Operator, SessionLocal
+
+        with SessionLocal() as db:
+            operator = db.get(Operator, user["oid"])
+            if operator is None or not operator.active:
+                raise HTTPException(status_code=401, detail="Seu acesso foi encerrado")
+            user["name"] = operator.name
+    return user
+
+
+def require_user(vigia_session: Optional[str] = Cookie(default=None)) -> str:
+    return current_user(vigia_session)["role"]
 
 
 def require_owner(vigia_session: Optional[str] = Cookie(default=None)) -> str:

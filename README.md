@@ -33,7 +33,7 @@ Câmeras ──RTSP──> Agente no local ──HTTPS──> Servidor na Railwa
 ## IA e operador trabalhando juntos
 
 A IA vigia todas as câmeras o tempo todo e destaca o que foge do normal. O operador da
-empresa entra no painel com uma senha própria e:
+empresa entra no painel com usuário e senha próprios, criados pelo dono em Ajustes, e:
 
 - **Revisa** o que a IA destacou: confirma e o dono recebe, ou descarta e o dono não é
   incomodado. Ligue com `OPERATOR_REVIEW=1`.
@@ -43,7 +43,15 @@ empresa entra no painel com uma senha própria e:
 Alertas críticos (câmera fora do ar, tampada, invasão) nunca esperam revisão. Se o operador
 não revisar em `REVIEW_TIMEOUT_MIN` minutos, o alerta segue com o aviso "não revisado".
 Descartar um alerta de comportamento deixa aquela câmera menos sensível. O operador não
-altera câmeras, números nem pausas.
+altera câmeras, números nem pausas. O histórico e o alerta mostram o nome de quem confirmou,
+e um operador removido perde o acesso na hora. `OPERATOR_PASSWORD` continua valendo como
+senha única, sem nome, para quem preferir.
+
+## Área protegida
+
+Na edição de cada câmera, o dono toca na imagem para desenhar a área que interessa, como o
+portão ou o pátio, e escolhe os dias e o horário. Só pessoas com os pés dentro da área
+geram alerta de invasão. Sem área desenhada, vale a imagem inteira.
 
 ## Menos alarme à toa
 

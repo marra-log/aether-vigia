@@ -132,7 +132,8 @@ def enqueue_alerts(db: Session, event: Event, ts: float) -> None:
                      not_before=not_before, created_at=now))
 
 
-def apply_review(db: Session, event: Event, real: bool, role: str) -> int:
+def apply_review(db: Session, event: Event, real: bool, role: str,
+                 name: Optional[str] = None) -> int:
     """Confirmação libera os alertas retidos; descarte cancela. Devolve quantos mudaram."""
     held = db.scalars(select(Alert).where(Alert.event_id == event.id,
                                           Alert.status == "review")).all()
@@ -141,7 +142,7 @@ def apply_review(db: Session, event: Event, real: bool, role: str) -> int:
             alert.status, alert.not_before = "pending", 0
         else:
             alert.status = "cancelled"
-    event.data = {**(event.data or {}), "reviewed_by": role}
+    event.data = {**(event.data or {}), "reviewed_by": role, "reviewed_name": name}
     return len(held)
 
 
@@ -251,11 +252,13 @@ def _build_message(db: Session, alert: Alert, recipient: Recipient) -> Outgoing:
         return Outgoing(to=recipient.phone, kind="resolved", text=text,
                         params=[event.title, place, duration], event_id=event.id)
     note = event.ai_note or event.detail
+    reviewer = (event.data or {}).get("reviewed_name")
     if event.type == "MANUAL":
-        note = f"Observação do operador: {event.detail}"
+        note = f"Observação do operador{f' {reviewer}' if reviewer else ''}: {event.detail}"
     extra = ""
     if (event.data or {}).get("reviewed_by") == "operator" and event.type != "MANUAL":
-        extra = "\n✔ Confirmado pela equipe de monitoramento."
+        extra = (f"\n✔ Confirmado por {reviewer}, da equipe de monitoramento." if reviewer
+                 else "\n✔ Confirmado pela equipe de monitoramento.")
     elif alert.payload.get("unreviewed"):
         extra = "\nAinda não revisado pelo operador."
     text = (f"{SEVERITY_ICON[event.severity]} *{event.title}*\n📍 {place}\n🕒 {when}\n\n"
@@ -431,9 +434,10 @@ def _parse_duration(token: str) -> Optional[timedelta]:
         return None
 
 
-def register_false_alarm(db: Session, event: Event, role: str = "owner") -> None:
+def register_false_alarm(db: Session, event: Event, role: str = "owner",
+                         name: Optional[str] = None) -> None:
     """Alarme falso de comportamento deixa aquela câmera menos sensível."""
-    apply_review(db, event, real=False, role=role)
+    apply_review(db, event, real=False, role=role, name=name)
     event.feedback = "false"
     event.acked_at = event.acked_at or time.time()
     if event.type.startswith("BEHAVIOR") and event.camera_id:

@@ -97,6 +97,18 @@ class Recipient(Base):
     can_command: Mapped[bool] = mapped_column(Boolean, default=True)
 
 
+class Operator(Base):
+    """Pessoa da equipe com login próprio no painel."""
+    __tablename__ = "operators"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    name: Mapped[str] = mapped_column(String(80))
+    username: Mapped[str] = mapped_column(String(40), unique=True)
+    password_hash: Mapped[str] = mapped_column(String(200))
+    active: Mapped[bool] = mapped_column(Boolean, default=True)
+    created_at: Mapped[float] = mapped_column(Float, default=0)
+    last_login: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+
+
 class Alert(Base):
     """Fila de saída do WhatsApp: cada linha é uma mensagem para uma pessoa."""
     __tablename__ = "alerts"

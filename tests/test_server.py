@@ -12,7 +12,7 @@ from sqlalchemy import delete, func, select
 
 from app import alerts, security, whatsapp
 from app.config import settings
-from app.db import (Alert, BaselineBucket, Camera, Event, KV, Metric, Recipient, SessionLocal,
+from app.db import (Operator, Alert, BaselineBucket, Camera, Event, KV, Metric, Recipient, SessionLocal,
                     init_db)
 from app.main import app
 from app.security import decrypt, mask_url
@@ -34,7 +34,7 @@ def client(provider):
     settings.validate()
     init_db()
     with SessionLocal() as db:
-        for model in (Alert, Event, Metric, BaselineBucket, Recipient, Camera, KV):
+        for model in (Alert, Event, Metric, BaselineBucket, Recipient, Operator, Camera, KV):
             db.execute(delete(model))
         db.commit()
     security._attempts.clear()
@@ -604,3 +604,76 @@ def test_comando_recebido_pelo_conector(client, provider):
     body = {"phone": "553199998888", "text": "status"}
     assert client.post("/webhook/whatsapp/hook-secret", json=body).status_code == 200
     assert "Loja Teste" in provider.sent[-1].text
+
+
+# Operadores com login próprio e áreas protegidas ---------------------------------------
+
+def new_operator(client, name="Ana Souza", username="ana.souza", password="senha-forte-1"):
+    r = client.post("/api/operators", json={"name": name, "username": username, "password": password})
+    assert r.status_code == 200, r.text
+    op = TestClient(app)
+    r2 = op.post("/api/login", json={"username": username.upper(), "password": password})
+    assert r2.status_code == 200 and r2.json()["role"] == "operator"
+    return r.json()["id"], op
+
+
+def test_operador_com_login_proprio_fica_registrado(client, provider, monkeypatch):
+    monkeypatch.setattr(settings, "operator_review", True)
+    cam = camera(client)
+    recipient(client)
+    _, ana = new_operator(client)
+    assert ana.get("/api/me").json()["name"] == "Ana Souza"
+    eid = event(client, cam, "BEHAVIOR_SPIKE")
+    ana.post(f"/api/events/{eid}/feedback", json={"feedback": "real"})
+    tick()
+    assert "Confirmado por Ana Souza, da equipe de monitoramento" in provider.sent[0].text
+    listed = client.get("/api/events").json()["events"][0]
+    assert listed["reviewed_by"] == "operator" and listed["reviewed_name"] == "Ana Souza"
+    ana.post(f"/api/cameras/{cam}/flag", json={"note": "Caminhão na contramão"})
+    tick()
+    assert "Observação do operador Ana Souza: Caminhão na contramão" in provider.sent[-1].text
+
+
+def test_senha_do_operador_e_guardada_com_hash(client):
+    oid, _ = new_operator(client)
+    with SessionLocal() as db:
+        stored = db.get(Operator, oid).password_hash
+    assert "senha-forte-1" not in stored and stored.startswith("scrypt$")
+    assert "password" not in client.get("/api/operators").text
+
+
+def test_login_de_operador_errado_e_usuario_duplicado(client):
+    new_operator(client)
+    fresh = TestClient(app)
+    assert fresh.post("/api/login", json={"username": "ana.souza", "password": "errada"}).status_code == 401
+    assert fresh.post("/api/login", json={"username": "ninguem", "password": "senha-forte-1"}).status_code == 401
+    # a senha do dono não entra pelo campo de operador
+    assert fresh.post("/api/login", json={"username": "ana.souza", "password": "dev"}).status_code == 401
+    dup = client.post("/api/operators", json={"name": "Outra", "username": "Ana.Souza", "password": "senha-forte-2"})
+    assert dup.status_code == 409
+    assert client.post("/api/operators", json={"name": "X Y", "username": "ab", "password": "senha-forte-2"}).status_code == 422
+    assert client.post("/api/operators", json={"name": "X Y", "username": "abc", "password": "curta"}).status_code == 422
+
+
+def test_operador_removido_perde_acesso_na_hora(client):
+    oid, ana = new_operator(client)
+    assert ana.get("/api/overview").status_code == 200
+    assert ana.get("/api/operators").status_code == 403
+    assert ana.post("/api/operators", json={"name": "Eu", "username": "eu.mesmo", "password": "senha-forte-9"}).status_code == 403
+    client.delete(f"/api/operators/{oid}")
+    assert ana.get("/api/overview").status_code == 401
+
+
+def test_area_protegida_e_dias(client):
+    cam = camera(client)
+    base = {"name": "Portão", "armed_start": "22:00", "armed_end": "06:00"}
+    zone = [[0.1, 0.2], [0.9, 0.2], [0.5, 0.95]]
+    r = client.put(f"/api/cameras/{cam}", json={**base, "zones": [zone], "armed_days": [5, 6, 5], "loiter_seconds": 300})
+    assert r.status_code == 200, r.text
+    cfg = client.get("/api/agent/config", headers=AGENT).json()["cameras"][0]
+    assert cfg["zones"] == [zone] and cfg["armed_days"] == [5, 6] and cfg["loiter_seconds"] == 300
+    assert cfg["url"].startswith("rtsp://admin")   # salvar sem endereço mantém o atual
+    for bad in ([[[0.1, 0.2], [0.9, 0.2]]], [[[0.1, 0.2], [1.4, 0.2], [0.5, 0.9]]], [[[0.1], [0.2], [0.3]]]):
+        assert client.put(f"/api/cameras/{cam}", json={**base, "zones": bad}).status_code == 422
+    assert client.put(f"/api/cameras/{cam}", json={**base, "armed_days": []}).status_code == 422
+    assert client.put(f"/api/cameras/{cam}", json={**base, "armed_days": [7]}).status_code == 422

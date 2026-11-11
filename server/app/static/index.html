@@ -75,6 +75,15 @@ textarea{min-height:96px;resize:vertical}
 .flag summary::-webkit-details-marker{display:none}
 .review{border-left:3px solid var(--ink);padding:2px 0 2px 10px;margin-top:10px;font-size:14px}
 .by{display:inline-block;font-size:12.5px;font-weight:600;border:1px solid var(--ink);border-radius:3px;padding:1px 6px;margin-left:8px;vertical-align:2px}
+.zone{position:relative;touch-action:none;user-select:none;border:1px solid var(--line);border-radius:2px;overflow:hidden;cursor:crosshair}
+.zone img{display:block;width:100%;aspect-ratio:16/9;object-fit:fill;pointer-events:none}
+.zone svg{position:absolute;inset:0;width:100%;height:100%}
+.days{display:flex;gap:4px;flex-wrap:wrap}
+.days label{display:block;font-weight:400}
+.days input{position:absolute;opacity:0;width:1px;height:1px;min-height:0;padding:0}
+.days span{display:inline-flex;min-width:40px;min-height:40px;font-size:14.5px;align-items:center;justify-content:center;border:1px solid var(--mute);border-radius:4px;padding:0 4px}
+.days input:checked+span{background:var(--ink);color:var(--paper);border-color:var(--ink);font-weight:600}
+.days input:focus-visible+span{outline:2px solid var(--ink);outline-offset:2px}
 .two{display:grid;grid-template-columns:1fr 1fr;gap:12px}
 .hint{font-size:13px;color:var(--mute);font-weight:400}
 .err{color:var(--crit);font-size:14px}
@@ -265,7 +274,7 @@ function chartBox(svg, series, kind) {
 // Moldura -----------------------------------------------------------------------------
 function shell(tab, html, badge = 0) {
   const items = isOperator() ? [["agora", "Agora"], ["ocorrencias", "Ocorrências"]]
-    : [["agora", "Agora"], ["ocorrencias", "Ocorrências"], ["cameras", "Câmeras"], ["alertas", "WhatsApp"]];
+    : [["agora", "Agora"], ["ocorrencias", "Ocorrências"], ["cameras", "Câmeras"], ["alertas", "Ajustes"]];
   const nav = items.map(([k, t]) => `<a href="#${k}" ${tab === k ? 'aria-current="page"' : ""}>${t}${k === "ocorrencias" && badge ? `<span class="dot">${badge}</span>` : ""}</a>`).join("");
   $app.innerHTML = `${DEMO ? '<div class="demo">Demonstração com dados simulados. Nenhuma câmera real está conectada.</div>' : ""}
     <main>${html}</main><nav aria-label="Principal">${nav}</nav>`;
@@ -280,11 +289,13 @@ function failure(tab, err) {
 function renderLogin(message) {
   clearTimeout(state.timer);
   $app.innerHTML = `<div class="login"><p class="verdict" style="font-size:40px">Aether Vigia</p>
-    <form id="login"><label>Senha<input type="password" name="password" autocomplete="current-password" required autofocus></label>
+    <form id="login"><label>Usuário<input name="username" autocomplete="username" autocapitalize="none" placeholder="Só para operadores"></label>
+    <label>Senha<input type="password" name="password" autocomplete="current-password" required></label>
+    <p class="hint">O dono entra só com a senha.</p>
     ${message ? `<p class="err">${esc(message)}</p>` : ""}<button class="btn">Entrar</button></form></div>`;
   document.getElementById("login").onsubmit = async (e) => {
     e.preventDefault();
-    try { await api("/api/login", { method: "POST", body: { password: e.target.password.value } }); state.me = null; route(); }
+    try { await api("/api/login", { method: "POST", body: { password: e.target.password.value, username: e.target.username.value.trim() } }); state.me = null; route(); }
     catch (err) { renderLogin(err.message); }
   };
 }
@@ -305,8 +316,9 @@ function verdict(d) {
 
 function eventCard(e, openIt = false) {
   const span = e.status === "open" ? `desde ${clock(e.started_at)}` : `durou ${duration(e.started_at, e.ended_at)}`;
-  const who = e.reviewed_by === "operator" ? "O operador" : "Você";
-  let answered = e.type === "MANUAL" ? `<p class="meta">Apontada ${e.reviewed_by === "operator" ? "pelo operador" : "por você"} e enviada ao WhatsApp.</p>`
+  const mine = e.reviewed_by === state.me?.role && (e.reviewed_name || null) === (state.me?.name || null);
+  const who = mine ? "Você" : e.reviewed_name ? esc(e.reviewed_name) : e.reviewed_by === "operator" ? "O operador" : "O dono";
+  let answered = e.type === "MANUAL" ? `<p class="meta">Apontada por ${mine ? "você" : e.reviewed_name ? esc(e.reviewed_name) : e.reviewed_by === "operator" ? "um operador" : "o dono"} e enviada ao WhatsApp.</p>`
     : e.feedback ? `<p class="meta">${e.feedback === "false" ? `${who} marcou como alarme falso.` : `${who} confirmou.`}</p>` : e.acked ? '<p class="meta">Já vista.</p>' : "";
   let actions = e.feedback ? "" : `<div class="actions"><button class="btn" data-fb="real" data-id="${e.id}">Vi, é real</button><button class="btn ghost" data-fb="false" data-id="${e.id}">Alarme falso</button></div>`;
   if (e.awaiting_review) {
@@ -422,6 +434,13 @@ function cameraForm(c) {
     <div class="two"><label>Proteger das<input name="armed_start" type="time" value="${esc(c?.armed_start ?? "")}"></label>
       <label>até as<input name="armed_end" type="time" value="${esc(c?.armed_end ?? "")}"></label></div>
     <p class="hint">Nesse horário, uma pessoa na imagem gera alerta crítico. Em branco, a câmera só monitora sinal e comportamento.</p>
+    <div><label style="margin-bottom:6px">Dias protegidos</label><div class="days">${["Seg", "Ter", "Qua", "Qui", "Sex", "Sáb", "Dom"].map((d, i) => `<label><input type="checkbox" name="day" value="${i}" ${(c?.armed_days ?? [0, 1, 2, 3, 4, 5, 6]).includes(i) ? "checked" : ""}><span>${d}</span></label>`).join("")}</div></div>
+    ${c?.has_thumb ? `<div><label style="margin-bottom:6px">Área protegida</label>
+      <div class="zone" id="zone"><img alt="Imagem da câmera" src="${img(`/api/cameras/${c.id}/thumb`)}"><svg viewBox="0 0 1000 562.5" preserveAspectRatio="none"></svg></div>
+      <p class="hint" id="zoneHint"></p>
+      <div class="actions" style="margin-top:6px"><button class="btn ghost" type="button" id="zoneUndo">Desfazer ponto</button><button class="btn ghost" type="button" id="zoneClear">Imagem inteira</button></div></div>`
+      : `<p class="hint">${c ? "A área protegida pode ser desenhada quando a primeira imagem desta câmera chegar." : "Depois de salvar, você poderá desenhar a área protegida sobre a imagem."}</p>`}
+    <label>Avisar se alguém ficar parado por mais de<select name="loiter">${[1, 2, 3, 5, 10, 15, 30].map((m) => `<option value="${m * 60}" ${(c?.loiter_seconds ?? 180) === m * 60 ? "selected" : ""}>${m} min</option>`).join("")}</select></label>
     <p class="err" hidden></p>
     <div class="actions"><button class="btn">${c ? "Salvar câmera" : "Adicionar câmera"}</button>
     ${c ? `<button class="btn ghost" type="button" data-del-cam="${c.id}">Remover câmera</button>` : ""}</div></form>`;
@@ -440,12 +459,16 @@ function bindCameraForm(existing) {
   const f = document.getElementById("camForm");
   const sync = () => { const other = f.brand.value === "other"; f.querySelector("[data-simple]").hidden = other; f.querySelector("[data-simple]").style.display = other ? "none" : ""; f.querySelector("[data-full]").hidden = !other; };
   f.brand.onchange = sync; sync();
+  const zone = zoneEditor(existing);
   f.onsubmit = async (e) => {
     e.preventDefault();
     const err = f.querySelector(".err");
+    const days = [...f.querySelectorAll("[name=day]:checked")].map((d) => +d.value);
+    if (!days.length) { err.hidden = false; err.textContent = "Escolha pelo menos um dia protegido."; return; }
+    if (zone.points.length && zone.points.length < 3) { err.hidden = false; err.textContent = "A área precisa de pelo menos 3 pontos. Toque mais vezes na imagem ou use Imagem inteira."; return; }
     const body = { name: f.name.value.trim(), location: "", url: buildUrl(f) || null,
       armed_start: f.armed_start.value || null, armed_end: f.armed_end.value || null,
-      armed_days: existing?.armed_days ?? [0, 1, 2, 3, 4, 5, 6], zones: existing?.zones ?? [], loiter_seconds: existing?.loiter_seconds ?? 180, enabled: true };
+      armed_days: days, zones: zone.points.length ? [zone.points, ...zone.others] : zone.others, loiter_seconds: +f.loiter.value, enabled: true };
     try {
       if (existing) await api(`/api/cameras/${existing.id}`, { method: "PUT", body });
       else await api("/api/cameras", { method: "POST", body });
@@ -457,6 +480,36 @@ function bindCameraForm(existing) {
     await api(`/api/cameras/${e.target.dataset.delCam}`, { method: "DELETE" });
     toast("Câmera removida."); location.hash = "#cameras"; route();
   });
+}
+
+// Área protegida: cada toque na imagem vira um ponto do polígono (coordenadas de 0 a 1).
+function zoneEditor(existing) {
+  const zones = existing?.zones ?? [];
+  const ed = { points: (zones[0] || []).map((p) => [...p]), others: zones.slice(1) };
+  const box = document.getElementById("zone");
+  if (!box) return ed;
+  const svg = box.querySelector("svg"), hint = document.getElementById("zoneHint");
+  const draw = () => {
+    const pts = ed.points.map(([x, y]) => `${(x * 1000).toFixed(1)},${(y * 562.5).toFixed(1)}`);
+    const shape = (list, dash) => `<polygon points="${list}" fill="rgba(196,18,47,.28)" stroke="#fff" stroke-width="3" ${dash ? 'stroke-dasharray="8 6"' : ""} vector-effect="non-scaling-stroke"/>`;
+    svg.innerHTML = ed.others.map((z) => shape(z.map(([x, y]) => `${x * 1000},${y * 562.5}`).join(" "), true)).join("")
+      + (pts.length >= 3 ? shape(pts.join(" ")) : pts.length === 2 ? `<polyline points="${pts.join(" ")}" fill="none" stroke="#fff" stroke-width="3" vector-effect="non-scaling-stroke"/>` : "")
+      + ed.points.map(([x, y]) => `<circle cx="${x * 1000}" cy="${y * 562.5}" r="9" fill="#c4122f" stroke="#fff" stroke-width="3"/>`).join("");
+    hint.textContent = !ed.points.length ? "Protegendo a imagem inteira. Toque na imagem para marcar só uma área, como o portão ou o pátio."
+      : ed.points.length < 3 ? `Faltam ${3 - ed.points.length} ponto(s) para fechar a área.`
+      : "Só pessoas com os pés dentro da área vermelha geram alerta. Toque para acrescentar pontos.";
+  };
+  box.addEventListener("pointerdown", (e) => {
+    if (ed.points.length >= 20) return;
+    const r = box.getBoundingClientRect();
+    const clamp = (v) => Math.min(Math.max(v, 0), 1);
+    ed.points.push([+clamp((e.clientX - r.left) / r.width).toFixed(4), +clamp((e.clientY - r.top) / r.height).toFixed(4)]);
+    draw();
+  });
+  document.getElementById("zoneUndo").onclick = () => { ed.points.pop(); draw(); };
+  document.getElementById("zoneClear").onclick = () => { ed.points = []; ed.others = []; draw(); };
+  draw();
+  return ed;
 }
 
 async function viewCameras(editId) {
@@ -476,10 +529,11 @@ const STATUS_TXT = { review: "Em revisão", sent: "Enviado", pending: "Na fila",
 const KIND_TXT = { alert: "Alerta", resolved: "Normalizado", digest: "Resumo diário", test: "Teste" };
 
 async function viewAlerts() {
-  const d = await api("/api/recipients");
+  const [d, team] = await Promise.all([api("/api/recipients"), api("/api/operators")]);
   const muted = d.mute_until > now();
   const providerName = { baileys: "QR Code, com o seu próprio número", console: "modo de teste, nada é enviado de verdade", meta: "API oficial da Meta", evolution: "Evolution API", zapi: "Z-API" }[d.provider.name];
-  shell("alertas", `<h1 class="page">WhatsApp</h1>
+  shell("alertas", `<h1 class="page">Ajustes</h1>
+    <h2 style="margin-top:0">WhatsApp</h2>
     <p class="${d.provider.configured ? "sub" : "err"}">${d.provider.configured ? `Enviando por ${esc(providerName)}.` : "O envio ainda não foi configurado no servidor."}</p>
     <div id="waConn"></div>
     <h2>Pausar avisos</h2>
@@ -495,11 +549,27 @@ async function viewAlerts() {
       <div class="two"><label>Não incomodar das<input name="quiet_start" type="time"></label><label>até as<input name="quiet_end" type="time"></label></div>
       <p class="hint">Alertas críticos chegam mesmo no horário de não incomodar.</p><p class="err" hidden></p>
       <div class="actions"><button class="btn">Adicionar pessoa</button></div></form>
+    <h2>Equipe de operadores</h2>
+    <p class="sub">${team.review ? `Revisão ligada: o que não é crítico espera um operador por até ${team.review_minutes} min antes de chegar a você.` : "Cada operador entra com o próprio usuário, e o histórico mostra quem confirmou cada ocorrência."}</p>
+    <div class="list">${team.operators.map((o) => `<div class="row"><span><b>${esc(o.name)}</b><br><span class="meta">Usuário ${esc(o.username)}, ${o.last_login ? `último acesso ${esc(ago(o.last_login))}` : "nunca entrou"}</span></span>
+      <button class="link" data-del-op="${o.id}" aria-label="Remover ${esc(o.name)}">Remover</button></div>`).join("") || '<p class="empty">Nenhum operador cadastrado.</p>'}</div>
+    <form id="opForm"><div class="two"><label>Nome<input name="name" required minlength="2" maxlength="80"></label>
+      <label>Usuário<input name="username" required minlength="3" maxlength="40" autocapitalize="none" autocomplete="off" placeholder="ana.silva"></label></div>
+      <label>Senha<input name="password" type="password" required minlength="8" autocomplete="new-password"></label>
+      <p class="hint">Pelo menos 8 caracteres. O operador revisa e aponta anomalias, mas não altera câmeras nem contatos.</p><p class="err" hidden></p>
+      <div class="actions"><button class="btn">Adicionar operador</button></div></form>
     <h2>Últimos envios</h2>
     <div class="list">${d.recent.map((a) => `<div class="row"><span>${esc(KIND_TXT[a.kind] || a.kind)}<br><span class="meta">${dayClock(a.created_at)}${a.error ? `, ${esc(a.error.slice(0, 80))}` : ""}</span></span><span class="status ${a.status === "sent" ? "s-ok" : a.status === "failed" ? "s-critical" : "s-mute"}">${STATUS_TXT[a.status] || esc(a.status)}</span></div>`).join("") || '<p class="empty">Nenhum envio ainda.</p>'}</div>
     ${DEMO ? "" : '<p style="margin-top:28px"><button class="link" id="logout">Sair</button></p>'}`);
   document.getElementById("logout")?.addEventListener("click", async () => { await api("/api/logout", { method: "POST" }); state.me = null; renderLogin(); });
   loadConnection();
+  const of = document.getElementById("opForm");
+  of.onsubmit = async (e) => {
+    e.preventDefault();
+    try { await api("/api/operators", { method: "POST", body: { name: of.name.value, username: of.username.value, password: of.password.value } }); toast("Operador adicionado."); route(); }
+    catch (x) { const err = of.querySelector(".err"); err.hidden = false; err.textContent = x.message; }
+  };
+  $app.querySelectorAll("[data-del-op]").forEach((b) => b.onclick = async () => { if (ask("Remover este operador? Ele perde o acesso na hora.")) { await api(`/api/operators/${b.dataset.delOp}`, { method: "DELETE" }); toast("Operador removido."); route(); } });
   const f = document.getElementById("recForm");
   f.onsubmit = async (e) => {
     e.preventDefault();

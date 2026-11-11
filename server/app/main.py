@@ -20,7 +20,7 @@ from sqlalchemy.orm import Session, undefer
 from . import alerts, anomaly, security
 from .catalog import CATALOG
 from .config import settings
-from .db import (Alert, Camera, Event, Metric, Recipient, SessionLocal, get_db, init_db,
+from .db import (Alert, Camera, Event, Metric, Operator, Recipient, SessionLocal, get_db, init_db,
                  kv_get, kv_set, session_scope)
 from .whatsapp import SendError, digits, get_provider, parse_incoming, verify_meta_signature
 
@@ -244,17 +244,30 @@ async def agent_snapshot(event_id: int, request: Request) -> Dict[str, bool]:
 
 class LoginIn(BaseModel):
     password: str = Field(max_length=200)
+    username: str = Field(default="", max_length=40)
 
 
 @app.post("/api/login")
 def login(body: LoginIn, request: Request, response: Response) -> Dict[str, Any]:
     security.check_login_rate(request)
-    role = security.password_role(body.password)
+    username = body.username.strip().lower()
+    role, operator_id, name = None, None, None
+    if username:   # operador com login próprio
+        with SessionLocal() as db:
+            operator = db.scalars(select(Operator).where(Operator.username == username,
+                                                         Operator.active.is_(True))).first()
+            if operator and security.verify_password(body.password, operator.password_hash):
+                role, operator_id, name = "operator", operator.id, operator.name
+                operator.last_login = time.time()
+                db.commit()
+    else:          # dono, ou a senha única de operador
+        role = security.password_role(body.password)
     if role is None:
         security.record_failed_login(request)
-        raise HTTPException(401, "Senha incorreta")
-    response.set_cookie(security.COOKIE, security.create_session(role), httponly=True, samesite="lax",
-                        secure=not settings.is_dev, max_age=security.SESSION_DAYS * 86400)
+        raise HTTPException(401, "Usuário ou senha incorretos" if username else "Senha incorreta")
+    response.set_cookie(security.COOKIE, security.create_session(role, operator_id, name),
+                        httponly=True, samesite="lax", secure=not settings.is_dev,
+                        max_age=security.SESSION_DAYS * 86400)
     return {"ok": True, "role": role}
 
 
@@ -269,8 +282,8 @@ user = [Depends(security.require_user)]
 
 
 @app.get("/api/me")
-def me(role: str = Depends(security.require_user)) -> Dict[str, Any]:
-    return {"role": role, "review": settings.operator_review,
+def me(who: dict = Depends(security.current_user)) -> Dict[str, Any]:
+    return {"role": who["role"], "name": who["name"], "review": settings.operator_review,
             "review_minutes": settings.review_timeout_s // 60}
 
 
@@ -279,6 +292,7 @@ def _event_json(e: Event, names: Dict[int, str], pending_review: Optional[set] =
     return {
         "awaiting_review": e.id in (pending_review or set()),
         "reviewed_by": (e.data or {}).get("reviewed_by"),
+        "reviewed_name": (e.data or {}).get("reviewed_name"),
         "id": e.id, "camera_id": e.camera_id, "camera": names.get(e.camera_id, settings.site_name),
         "type": e.type, "kind": info.kind, "severity": e.severity, "status": e.status,
         "started_at": e.started_at, "ended_at": e.ended_at, "title": e.title,
@@ -441,15 +455,16 @@ class FeedbackIn(BaseModel):
 
 
 @app.post("/api/events/{event_id}/feedback")
-def event_feedback(event_id: int, body: FeedbackIn, role: str = Depends(security.require_user),
+def event_feedback(event_id: int, body: FeedbackIn, who: dict = Depends(security.current_user),
                    db: Session = Depends(get_db)) -> Dict[str, bool]:
+    role, name = who["role"], who["name"]
     event = db.get(Event, event_id)
     if event is None:
         raise HTTPException(404, "Ocorrência não encontrada")
     if body.feedback == "false":
-        alerts.register_false_alarm(db, event, role)
+        alerts.register_false_alarm(db, event, role, name)
     elif body.feedback == "real":
-        alerts.apply_review(db, event, real=True, role=role)
+        alerts.apply_review(db, event, real=True, role=role, name=name)
         event.feedback, event.acked_at = "real", event.acked_at or time.time()
     else:
         raise HTTPException(422, "feedback inválido")
@@ -470,7 +485,7 @@ class FlagIn(BaseModel):
 
 
 @app.post("/api/cameras/{camera_id}/flag")
-def flag_anomaly(camera_id: int, body: FlagIn, role: str = Depends(security.require_user),
+def flag_anomaly(camera_id: int, body: FlagIn, who: dict = Depends(security.current_user),
                  db: Session = Depends(get_db)) -> Dict[str, Any]:
     """O operador (ou o dono) aponta algo que viu. Vai ao WhatsApp com a última imagem."""
     camera = db.scalars(select(Camera).options(undefer(Camera.thumb))
@@ -478,7 +493,7 @@ def flag_anomaly(camera_id: int, body: FlagIn, role: str = Depends(security.requ
     if camera is None:
         raise HTTPException(404, "Câmera não encontrada")
     now = time.time()
-    event = alerts.open_event(db, camera.id, "MANUAL", now, data={"reviewed_by": role},
+    event = alerts.open_event(db, camera.id, "MANUAL", now, data={"reviewed_by": who["role"], "reviewed_name": who["name"]},
                               snapshot=camera.thumb, detail=body.note.strip(),
                               severity=body.severity)
     event.status, event.ended_at, event.feedback, event.acked_at = "closed", now, "real", now
@@ -496,6 +511,26 @@ class CameraIn(BaseModel):
     armed_days: List[int] = [0, 1, 2, 3, 4, 5, 6]
     zones: List[List[List[float]]] = []
     loiter_seconds: int = Field(default=180, ge=30, le=3600)
+
+    @field_validator("zones")
+    @classmethod
+    def valid_zones(cls, v: List[List[List[float]]]) -> List[List[List[float]]]:
+        if len(v) > 5:
+            raise ValueError("No máximo 5 áreas por câmera")
+        for polygon in v:
+            if not 3 <= len(polygon) <= 20:
+                raise ValueError("Cada área precisa de 3 a 20 pontos")
+            for point in polygon:
+                if len(point) != 2 or not all(0.0 <= c <= 1.0 for c in point):
+                    raise ValueError("Ponto fora da imagem")
+        return [[[round(x, 4), round(y, 4)] for x, y in polygon] for polygon in v]
+
+    @field_validator("armed_days")
+    @classmethod
+    def valid_days(cls, v: List[int]) -> List[int]:
+        if not v or any(d not in range(7) for d in v):
+            raise ValueError("Escolha pelo menos um dia da semana")
+        return sorted(set(v))
 
     @field_validator("url")
     @classmethod
@@ -518,7 +553,8 @@ def _camera_json(c: Camera) -> Dict[str, Any]:
     return {"id": c.id, "name": c.name, "location": c.location, "enabled": c.enabled, "state": c.state,
             "url_masked": security.mask_url(security.decrypt(c.rtsp_enc)),
             "armed_start": c.armed_start, "armed_end": c.armed_end, "armed_days": c.armed_days,
-            "zones": c.zones, "loiter_seconds": c.loiter_seconds}
+            "zones": c.zones, "loiter_seconds": c.loiter_seconds,
+            "has_thumb": c.thumb_ts is not None}
 
 
 @app.get("/api/cameras", dependencies=user)
@@ -551,6 +587,55 @@ def update_camera(camera_id: int, body: CameraIn, db: Session = Depends(get_db))
 @app.delete("/api/cameras/{camera_id}", dependencies=owner)
 def delete_camera(camera_id: int, db: Session = Depends(get_db)) -> Dict[str, bool]:
     db.delete(_camera_or_404(db, camera_id))
+    db.commit()
+    return {"ok": True}
+
+
+USERNAME_RE = re.compile(r"^[a-z0-9._-]{3,40}$")
+
+
+class OperatorIn(BaseModel):
+    name: str = Field(min_length=2, max_length=80)
+    username: str = Field(min_length=3, max_length=40)
+    password: str = Field(min_length=8, max_length=200)
+
+    @field_validator("username")
+    @classmethod
+    def clean_username(cls, v: str) -> str:
+        v = v.strip().lower()
+        if not USERNAME_RE.match(v):
+            raise ValueError("Usuário com 3 a 40 letras minúsculas, números, ponto ou hífen")
+        return v
+
+
+def _operator_json(o: Operator) -> Dict[str, Any]:
+    return {"id": o.id, "name": o.name, "username": o.username, "active": o.active,
+            "last_login": o.last_login}
+
+
+@app.get("/api/operators", dependencies=owner)
+def list_operators(db: Session = Depends(get_db)) -> Dict[str, Any]:
+    return {"operators": [_operator_json(o) for o in db.scalars(select(Operator).order_by(Operator.name))],
+            "review": settings.operator_review, "review_minutes": settings.review_timeout_s // 60}
+
+
+@app.post("/api/operators", dependencies=owner)
+def create_operator(body: OperatorIn, db: Session = Depends(get_db)) -> Dict[str, Any]:
+    if db.scalar(select(Operator.id).where(Operator.username == body.username)):
+        raise HTTPException(409, "Já existe um operador com esse usuário")
+    operator = Operator(name=body.name.strip(), username=body.username,
+                        password_hash=security.hash_password(body.password), created_at=time.time())
+    db.add(operator)
+    db.commit()
+    return _operator_json(operator)
+
+
+@app.delete("/api/operators/{operator_id}", dependencies=owner)
+def delete_operator(operator_id: int, db: Session = Depends(get_db)) -> Dict[str, bool]:
+    operator = db.get(Operator, operator_id)
+    if operator is None:
+        raise HTTPException(404, "Operador não encontrado")
+    db.delete(operator)
     db.commit()
     return {"ok": True}
 
