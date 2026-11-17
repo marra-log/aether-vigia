@@ -822,3 +822,9 @@ async def secret_webhook(secret: str, data: dict = Body(...)) -> JSONResponse:
 @app.get("/")
 def index() -> FileResponse:
     return FileResponse(STATIC / "index.html", headers={"Cache-Control": "no-cache"})
+
+
+@app.get("/demo")
+def demo() -> FileResponse:
+    """Painel de demonstração: dados simulados, sem login, não toca no banco."""
+    return FileResponse(STATIC / "demo.html", headers={"Cache-Control": "no-cache"})
