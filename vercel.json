@@ -1,0 +1,4 @@
+{
+  "outputDirectory": "server/app/static",
+  "rewrites": [{ "source": "/", "destination": "/demo.html" }]
+}
